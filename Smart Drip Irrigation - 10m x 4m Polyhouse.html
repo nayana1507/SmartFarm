@@ -1,0 +1,133 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Smart Drip Irrigation - 10m x 4m Polyhouse</title>
+<style>
+:root{--bg:#eef2ef;--card:#fff;--tx:#1d2b25;--mu:#66756d;--bd:#d5ddd8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#141a17;--card:#1e2723;--tx:#e8efeb;--mu:#93a39a;--bd:#33413a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:13px system-ui,Segoe UI,sans-serif}
+.app{display:flex;gap:12px;padding:12px;max-width:1360px;margin:auto}
+.left{flex:1;min-width:0}.right{width:340px;flex:none;display:flex;flex-direction:column;gap:8px}
+.wrap{position:relative;background:#f4f7f5;border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+canvas{display:block;width:100%;height:auto}
+.bar{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
+button{border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:8px 14px;border-radius:8px;font-weight:600;cursor:pointer}
+button.p{background:#1f8f55;color:#fff;border-color:#1f8f55}button.d{background:#d9382c;color:#fff;border-color:#d9382c}
+.stage{font-weight:600;color:var(--mu)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:9px}
+h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mu)}
+.zg{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.z{border:2px solid;border-radius:8px;padding:4px 2px;text-align:center}.z b{display:block;font-size:17px}.z small{font-size:9px;color:var(--mu)}
+.z i{display:block;height:5px;border-radius:3px;margin:3px 4px 0}
+.st{display:grid;grid-template-columns:1fr 1fr;gap:6px}.st div{background:var(--bg);border-radius:8px;padding:6px 8px}.st b{font-size:18px;display:block}
+.chips{display:flex;gap:4px;flex-wrap:wrap}.chip{padding:3px 7px;border-radius:6px;font-weight:700;font-size:11px;color:#fff;border-left:5px solid}
+#alert{display:none;background:#d9382c;color:#fff;font-weight:700;padding:8px;border-radius:8px;text-align:center}
+#alert.on{display:block;animation:fl .6s infinite alternate}@keyframes fl{to{opacity:.35}}
+#sum{display:none;position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);background:var(--card);border:3px solid #1f8f55;border-radius:12px;padding:16px 22px;text-align:center;box-shadow:0 8px 30px #0005;max-width:90%}
+#sum h2{margin:0 0 6px;color:#1f8f55;font-size:18px}#sum p{margin:3px 0}
+@media(max-width:900px){.app{flex-direction:column}.right{width:auto}}
+</style></head><body><div class="app">
+<div class="left"><div class="wrap"><canvas id="cv" width="1760" height="1280"></canvas>
+<div id="sum"><h2>Z1 Irrigation Complete</h2><p>Delivered: ~120 L | Runtime: 60 min (time-lapsed)</p><p>Next Zone Check in 5 min</p></div></div>
+<div class="bar"><button class="p" id="bp">Play</button><button id="bq">Pause</button><button id="br">Reset</button><button class="d" id="bt">Trigger Dry Soil in Z1</button><span class="stage" id="stage"></span></div></div>
+<div class="right">
+<div id="alert">Z1 BELOW THRESHOLD 30%</div>
+<div class="card"><h3>Soil moisture (avg per zone)</h3><div class="zg" id="zg"></div></div>
+<div class="card"><h3>Z1 moisture vs time</h3><canvas id="gr" width="640" height="300"></canvas></div>
+<div class="card st"><div>Tank level<b id="vT">-</b></div><div>Flow FS1<b id="vF">-</b></div><div>Pressure<b id="vP">-</b></div><div>Energy P21<b id="vE">-</b></div></div>
+<div class="card"><h3>ESP32: <span id="esp"></span></h3><div class="chips" id="chips"></div><div id="lock" style="margin-top:6px;color:var(--mu);font-size:11px"></div></div>
+</div></div>
+<script>
+const W=880,H=640,cv=document.getElementById('cv'),C=cv.getContext('2d'),gr=document.getElementById('gr'),G=gr.getContext('2d'),$=i=>document.getElementById(i);
+const Z=[{n:'Z1 TOMATO',c:'#e63e6d',r:[84,228,626,80],L:2,D:60,f:'2 L/h | 2.00 L/min'},{n:'Z2 GREEN CHILLI',c:'#2fa34f',r:[84,132,310,90],L:2,D:28,f:'2 L/h | 0.93 L/min'},{n:'Z3 BRINJAL',c:'#8e44ad',r:[400,132,310,90],L:2,D:28,f:'2 L/h | 0.93 L/min'},{n:'Z4 OKRA',c:'#f08a1c',r:[84,42,310,84],L:2,D:28,f:'2 L/h | 0.93 L/min'},{n:'Z5 SPINACH',c:'#17a79e',r:[400,42,310,84],L:4,D:56,f:'1 L/h | 0.93 L/min'}];
+Z.forEach(z=>{z.ly=[...Array(z.L)].map((_,i)=>z.r[1]+z.r[3]*(i+1)/(z.L+1))});
+const dx=(z,j)=>z===Z[0]?92+j*20.4:z.r[0]+8+j*(z.r[2]-16)/(z.D/z.L-1);
+const SEN=[['SM1',300,0,.3],['SM2',520,0,.7],['SM3',200,1],['SM4',330,1],['SM5',520,2],['SM6',200,3],['SM7',480,4],['SM8',620,4]];
+const M=[[120,568],[170,568],[215,568],[260,568],[305,568],[355,568],[420,568],[500,568],[740,568],[740,540],[740,266],[700,266]];
+const LA=[[700,266],[700,Z[0].ly[0]],[90,Z[0].ly[0]]],LB=[[700,266],[700,Z[0].ly[1]],[90,Z[0].ly[1]]];
+const cum=p=>{let a=[0];for(let i=1;i<p.length;i++)a.push(a[i-1]+Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]));return a};
+const cM=cum(M),cA=cum(LA),LM=cM[cM.length-1],LL=cA[cA.length-1];
+function at(p,c,s){s=Math.max(0,Math.min(s,c[c.length-1]));let i=1;while(i<c.length-1&&c[i]<s)i++;const k=(s-c[i-1])/((c[i]-c[i-1])||1);return[p[i-1][0]+(p[i][0]-p[i-1][0])*k,p[i-1][1]+(p[i][1]-p[i-1][1])*k,i]}
+function part(p,c,s){const e=at(p,c,s),r=p.slice(0,e[2]);r.push([e[0],e[1]]);return r}
+function line(p,w,col,dash){C.beginPath();p.forEach((q,i)=>i?C.lineTo(q[0],q[1]):C.moveTo(q[0],q[1]));C.lineWidth=w;C.strokeStyle=col;C.lineJoin='round';C.setLineDash(dash||[]);C.stroke();C.setLineDash([])}
+const cl=(x,a=0,b=1)=>Math.max(a,Math.min(b,x)),sm=x=>{x=cl(x);return x*x*(3-2*x)};
+function K(x,a){for(let i=1;i<a.length;i++)if(x<=a[i][0]){const k=(x-a[i-1][0])/(a[i][0]-a[i-1][0]);return a[i-1][1]+(a[i][1]-a[i-1][1])*k}return a[a.length-1][1]}
+let t=0,trig=null,play=false,hist=[],lastH=-1,tick=0,ang=0,wheel=0;
+function derive(st){const S={st,m:[38.8+.5*Math.sin(t*.7),41.5+1.2*Math.sin(t*.5+1),43+1.2*Math.sin(t*.4+2),40.5+1.2*Math.sin(t*.6+3),44+.8*Math.sin(t*.45+4)]};
+if(st>=0)S.m[0]=K(st,[[0,38],[2.7,34],[5.3,31],[8,29],[22,29],[35,31],[40,36.5],[44,42.2],[60,42.4]]);
+const on=st>=12&&st<44;S.on=on;S.relay=st>=11&&st<44;S.v=[st>=19&&st<44,0,0,0,0];
+S.pr=on?cl((st-12)/4)*1.2:st>=44?1.2*cl(1-(st-44)):0;S.fl=on&&st>=17.5?2*cl((st-17.5)/1.5):0;
+S.vol=120*cl((st-18)/26);S.tank=85-S.vol/3;S.front=on?cl((st-12)/8):0;S.wet=cl((st-22)/22);S.drip=st>=22&&st<44;
+S.esp=st<0?'MONITORING':st<8?'DRY SOIL DETECTED':st<12?'DECISION LOGIC':st<44?'IRRIGATING Z1':'Z1 COMPLETE - MONITORING';
+S.stg=st<0?'1 Normal state':st<8?'2 Trigger event':st<12?'3 ESP32 decision':st<22?'4 Hydraulic activation':st<35?'5 Drip irrigation':st<45?'6 Recovery and auto-stop':'6 Complete';
+S.pw=on?375:5;return S}
+const col=m=>m<30?'#e0352b':m<34?'#e8b923':'#2fa34f';
+function cam(st){const a=sm((st-7.5)/1.5)*(1-sm((st-11.5)/.8)),b=sm((st-21)/2)*(1-sm((st-34)/2));
+return{s:1+1.6*a+.35*b,x:W/2+(170-W/2)*a+(397-W/2)*b,y:H/2+(170-H/2)*a+(262-H/2)*b}}
+function tx(s,x,y,sz,c,al,b){C.font=(b?'700 ':'')+sz+'px system-ui,sans-serif';C.fillStyle=c||'#1d2b25';C.textAlign=al||'left';C.fillText(s,x,y)}
+function rr(x,y,w,h,r,f,s,lw){C.beginPath();C.roundRect(x,y,w,h,r);if(f){C.fillStyle=f;C.fill()}if(s){C.lineWidth=lw||1;C.strokeStyle=s;C.stroke()}}
+function draw(S){C.setTransform(2,0,0,2,0,0);C.fillStyle='#f4f7f5';C.fillRect(0,0,W,H);
+const cm=cam(S.st);C.save();C.translate(W/2,H/2);C.scale(cm.s,cm.s);C.translate(-cm.x,-cm.y);
+rr(30,36,680,272,4,'#fbfdfb','#5b6b63',3);
+Z.forEach((z,zi)=>{const[x,y,w,h]=z.r;rr(x,y,w,h,5,'#e4d2ae',z.c,2);C.fillStyle=z.c+'30';C.fillRect(x,y,w,h);
+if(zi===0){C.save();C.beginPath();C.rect(x,y,w,h);C.clip();for(let l=0;l<2;l++)for(let j=0;j<30;j++){C.beginPath();C.arc(dx(z,j),z.ly[l],S.wet*17,0,7);C.fillStyle='rgba(60,40,28,.3)';C.fill()}C.restore()}
+tx(z.n,x+6,y+13,11,z.c,'left',1);tx(z.L+' laterals | '+z.D+' drippers | '+z.f,x+6,y+h-5,9.5,'#333');
+z.ly.forEach((ly,li)=>{line([[x+4,ly],[x+w-4,ly]],2,z.c);for(let j=0;j<z.D/z.L;j++){const px=dx(z,j);C.beginPath();C.arc(px,ly,1.8,0,7);C.fillStyle='#222';C.fill();
+if(zi===0&&S.drip){const ph=(t*1.2+j*.37+li*.5)%1;C.beginPath();C.arc(px,ly+3+ph*13,2.3,0,7);C.fillStyle='rgba(47,140,255,'+(1-ph*.6)+')';C.fill()}}})});
+if(S.st>=0&&S.st<44&&S.m[0]<30){C.globalAlpha=.4+.4*Math.sin(t*9);rr(84,228,626,80,5,null,'#e0352b',5);C.globalAlpha=1;tx('Z1 BELOW THRESHOLD 30%',397,222,13,'#e0352b','center',1)}
+line([[84,172],[710,172]],1,'#9aa',[6,4]);tx('Ridge | continuous ventilation gap 0.5-1.0 m',700,129,9,'#778','right');
+SEN.forEach(s=>{const z=Z[s[2]],y=s[2]===0?(s[0]==='SM1'?z.ly[0]+14:z.ly[1]-14):z.r[1]+z.r[3]/2+8;C.beginPath();C.arc(s[1],y,5,0,7);C.fillStyle=s[2]===0?col(S.m[0]):z.c;C.fill();C.lineWidth=1.5;C.strokeStyle='#fff';C.stroke();tx(s[0],s[1],y-8,9,'#222','center',1)});
+[['SH1',150,150],['SH2',640,150],['ST1',250,200],['ST2',600,196]].forEach(a=>{C.fillStyle='#334';C.fillRect(a[1]-4,a[2]-4,8,8);tx(a[0],a[1]+14,a[2]+3,9,'#334','left',1)});tx('SH +1.5m / ST soil',400,160,9,'#556','center');
+C.beginPath();C.arc(400,172,5,0,7);C.fillStyle='#f5c518';C.fill();tx('LX1 +2.0m',410,176,9,'#555');
+rr(30,36,54,272,3,'#e8eef1','#5b6b63',2);tx('SERVICE',57,52,8,'#444','center',1);tx('BAY',57,62,8,'#444','center',1);
+C.clearRect(28,252,6,36);C.fillStyle='#f4f7f5';C.fillRect(27,252,7,36);C.beginPath();C.arc(30,288,36,-1.57,0);C.setLineDash([3,3]);C.strokeStyle='#888';C.lineWidth=1;C.stroke();C.setLineDash([]);tx('DOOR',58,276,8,'#666','center');
+rr(36,92,42,150,3,'#2d3a42','#111');tx('ESP32',57,106,8,'#fff','center',1);tx('CONTROL PANEL',57,115,5.5,'#cfe','center');
+const lab=['R1 P','V1','V2','V3','V4','V5'];lab.forEach((l,i)=>{const on=i===0?S.relay:(i===1?S.v[0]:0),y=128+i*14;C.beginPath();C.arc(46,y,3.5,0,7);C.fillStyle=on?'#37ff7a':'#552';C.fill();tx(l,54,y+3,7,'#cfe')});
+tx('P21 '+S.pw+'W',57,224,7,'#ffd54a','center',1);tx(S.relay?'CLICK! ON':'RELAY OFF',57,236,6,S.relay?'#37ff7a':'#aaa','center',1);
+// circuit
+tx('IRRIGATION CIRCUIT  (Tank > Pump > NRV > Filter > Gauge > Venturi > FS1 > Mainline > Manifold > Laterals)',30,352,11,'#445','left',1);
+const hd=[[500,568],[840,568]];line(M.slice(0,7),4,'#b9c9d9');line(M.slice(6),8,'#b9c9d9');line(hd,8,'#b9c9d9');line(M.slice(9),3,'#b9c9d9');
+[[765,190],[790,165],[815,100],[840,70]].forEach((p,i)=>{line([[p[0],540],[p[0],p[1]],[712,p[1]]],2,Z[i+1].c+'88',[5,4]);tx('>Z'+(i+2),714,p[1]-3,9,Z[i+1].c,'left',1)});
+line(LA,2,'#b9c9d9');line(LB,2,'#b9c9d9');
+rr(20,478,100,142,6,'#eaf4ff','#335',2);const th=122*S.tank/100;C.fillStyle='#4aa3ff';C.fillRect(24,614-th,92,th);tx('TANK 300L',70,494,10,'#123','center',1);tx(S.tank.toFixed(0)+'%',70,560,15,'#fff','center',1);
+rr(40,470,40,9,2,'#556');tx('US1 JSN-SR04T',60,464,8,'#333','center',1);C.beginPath();C.arc(60,440+0,0,0,1);const pu=(t*2)%1;C.beginPath();C.arc(60,479,6+pu*10,.2,2.9);C.strokeStyle='rgba(80,80,200,'+(1-pu)+')';C.lineWidth=1;C.stroke();
+rr(96,596,18,6,1,'#f60');tx('FL1',104,592,8,'#a40','center',1);
+const act=i=>S.front*(LM+LL)>=cM[i];
+C.save();C.translate(170,568);C.rotate(ang);C.beginPath();C.arc(0,0,16,0,7);C.fillStyle='#e9eef2';C.fill();C.strokeStyle='#345';C.lineWidth=2;C.stroke();for(let i=0;i<3;i++){C.rotate(2.09);C.fillStyle=S.on?'#2a78e0':'#889';C.fillRect(0,-2,13,4)}C.restore();
+tx('0.5HP PUMP',170,600,8.5,'#223','center',1);tx('suction',143,560,8,'#668','center');
+C.beginPath();C.moveTo(205,558);C.lineTo(225,568);C.lineTo(205,578);C.closePath();C.fillStyle=act(2)?'#2fa34f':'#c33';C.fill();tx('NRV',215,600,8.5,'#223','center',1);
+rr(246,553,28,30,4,'#dfe8ee','#345',1.5);for(let i=0;i<5;i++)line([[250+i*5,556],[250+i*5,580]],1,'#789');tx('FILTER',260,600,8.5,'#223','center',1);tx('120 mesh',260,610,7.5,'#445','center');
+line([[305,568],[305,545]],2,'#678');C.beginPath();C.arc(305,532,16,0,7);C.fillStyle='#fff';C.fill();C.strokeStyle='#345';C.lineWidth=2;C.stroke();const ga=-2.35+S.pr/4*4.7;line([[305,532],[305+12*Math.cos(ga),532+12*Math.sin(ga)]],2,'#d22');tx(S.pr.toFixed(1)+' bar',305,515,9,'#223','center',1);tx('GAUGE 0-4',305,600,8.5,'#223','center',1);
+C.beginPath();C.moveTo(335,560);C.lineTo(355,566);C.lineTo(375,560);C.lineTo(375,576);C.lineTo(355,570);C.lineTo(335,576);C.closePath();C.fillStyle='#cfe3ff';C.fill();C.strokeStyle='#345';C.lineWidth=1.5;C.stroke();
+line([[335,578],[335,590],[375,590],[375,578]],2,'#678');C.beginPath();C.arc(355,590,4,0,7);C.fillStyle='#fc0';C.fill();tx('VENTURI + bypass',355,606,8,'#223','center',1);
+rr(325,470,58,34,4,'#e3f7e3','#2a7','1.5');tx('FERT 15L',354,490,9,'#164','center',1);line([[354,504],[354,566]],2.5,'#2fa34f');
+rr(395,553,50,30,4,'#fff','#345',1.5);C.save();C.translate(407,568);C.rotate(wheel);C.fillStyle='#378';C.fillRect(-7,-2,14,4);C.fillRect(-2,-7,4,14);C.restore();tx(S.fl.toFixed(2),428,572,10,'#d22','center',1);tx('FS1 YF-S401',420,600,8.5,'#223','center',1);tx('L/min',428,582,7,'#556','center');
+tx('25mm PVC MAINLINE',580,556,10,'#235','center',1);tx('MANIFOLD',790,527,9,'#445','center',1);
+// water overlay
+if(S.front>0){const d=S.front*(LM+LL);line(part(M,cM,Math.min(d,LM)),4,'#1f6fe0');if(d>LM){line(part(LA,cA,d-LM),3,'#1f6fe0');line(part(LB,cA,d-LM),3,'#1f6fe0')}
+const dots=(p,c,off,lim)=>{for(let s=(t*45)%14;s<lim;s+=14){const q=at(p,c,s);C.beginPath();C.arc(q[0],q[1],2.6,0,7);C.fillStyle='#bfe0ff';C.fill();C.strokeStyle='#1f6fe0';C.lineWidth=1;C.stroke()}};
+dots(M,cM,0,Math.min(d,LM));if(d>LM){dots(LA,cA,0,d-LM);dots(LB,cA,0,d-LM)}
+if(act(5)){tx('Fertigation',355,545,8,'#2a7','center',1)}}
+[1,2,3,4,5].forEach((n,i)=>{const x=740+i*25,op=i===0&&S.v[0];rr(x-8,531,16,16,3,op?'#2fa34f':'#d9382c',Z[i].c,2.5);tx('V'+n,x,583,9,Z[i].c,'center',1)});
+tx(S.v[0]?'OPEN':'closed',740,622,8,S.v[0]?'#2fa34f':'#d9382c','center',1);
+C.restore();
+C.setTransform(2,0,0,2,0,0);
+if(S.st>=8.4&&S.st<12){rr(330,120,520,330,12,'rgba(20,30,40,.95)','#37ff7a',2);tx('ESP32 DECISION LOGIC',350,152,15,'#37ff7a','left',1);
+const hold=Math.min(10,(S.st-8)*2.5);['IF  avg_SM_Z1 < 30%  for 10 s  ('+hold.toFixed(1)+' s)','AND  Tank Level > 20%   ('+S.tank.toFixed(0)+'%)','THEN  Pump = ON ,  V1 = ON'].forEach((l,i)=>tx(l,350,195+i*34,15,i===2&&S.st>10.5?'#37ff7a':'#fff','left',1));
+tx('Relay R1: '+(S.relay?'ON  *CLICK*':'waiting...'),350,320,15,S.relay?'#37ff7a':'#ffd54a','left',1);tx('V2 V3 V4 V5 LOCKED - ZONES RUN ONE AT A TIME',350,360,13,'#ff8a80','left',1);tx('avg_SM_Z1 now: '+S.m[0].toFixed(1)+'%',350,400,13,'#9cf','left')}
+}
+function ui(S){$('stage').textContent='Stage: '+S.stg;$('esp').textContent=S.esp;$('alert').classList.toggle('on',S.st>=0&&S.st<44&&S.m[0]<30);
+$('zg').innerHTML=Z.map((z,i)=>{const m=S.m[i];return`<div class=z style="border-color:${z.c}"><small>Z${i+1}</small><b style="color:${col(m)}">${m.toFixed(1)}%</b><i style="background:${col(m)}"></i></div>`}).join('');
+$('vT').textContent=S.tank.toFixed(0)+'%';$('vF').textContent=S.fl.toFixed(2)+' L/min';$('vP').textContent=S.pr.toFixed(1)+' bar';$('vE').textContent=S.pw+' W';
+$('chips').innerHTML=`<span class=chip style="background:${S.on?'#2fa34f':'#7a857f'};border-color:#2a78e0">PUMP ${S.on?'ON':'OFF'}</span>`+Z.map((z,i)=>`<span class=chip style="background:${i===0&&S.v[0]?'#2fa34f':'#d9382c'};border-color:${z.c}">V${i+1} ${i===0&&S.v[0]?'OPEN':'CLOSED'}</span>`).join('');
+$('lock').textContent=S.on?'Interlock: V2-V5 locked - one zone at a time':'All zones idle';$('sum').style.display=S.st>=45.3?'block':'none'}
+function graph(){const w=640,h=300,x0=34,y0=10,pw=w-x0-8,ph=h-y0-24,X=v=>x0+pw*(v-(t-60))/60,Y=v=>y0+ph*(1-(v-20)/30);G.clearRect(0,0,w,h);G.font='12px system-ui';G.fillStyle='#889';G.textAlign='right';
+[20,30,42,50].forEach(v=>{G.fillText(v,x0-4,Y(v)+4)});[[30,'#e0352b'],[42,'#2fa34f']].forEach(a=>{G.beginPath();G.setLineDash([6,4]);G.moveTo(x0,Y(a[0]));G.lineTo(w-8,Y(a[0]));G.strokeStyle=a[1];G.stroke();G.setLineDash([])});
+for(let z=4;z>=0;z--){G.beginPath();let f=1;hist.forEach(p=>{if(p[0]<t-60)return;const x=X(p[0]),y=Y(p[z+1]);f?G.moveTo(x,y):G.lineTo(x,y);f=0});G.strokeStyle=z?Z[z].c+'99':'#888';G.lineWidth=z?1.2:0;if(z)G.stroke()}
+for(let i=1;i<hist.length;i++){if(hist[i][0]<t-60)continue;G.beginPath();G.moveTo(X(hist[i-1][0]),Y(hist[i-1][1]));G.lineTo(X(hist[i][0]),Y(hist[i][1]));G.strokeStyle=col(hist[i][1]);G.lineWidth=3.5;G.stroke()}
+G.fillStyle='#889';G.textAlign='left';G.fillText('lower 30% / upper 42%  (last 60 s)',x0+4,h-6)}
+function frame(ts){const dt=Math.min(.05,(ts-(frame.l||ts))/1000);frame.l=ts;if(play){t+=dt;ang+=dt*14;wheel+=dt*10*0;if(trig===null&&t>=4)trig=t}
+const st=trig===null?-1:t-trig,S=derive(st);if(S.fl>0)wheel+=S.fl*dt*4;if(S.on)ang+=dt*0;
+if(play&&t-lastH>=.2){lastH=t;hist.push([t,...S.m]);if(hist.length>400)hist.shift()}
+draw(S);ui(S);graph();requestAnimationFrame(frame)}
+$('bp').onclick=()=>play=true;$('bq').onclick=()=>play=false;$('bt').onclick=()=>{if(trig===null){play=true;trig=t}};
+$('br').onclick=()=>{t=0;trig=null;play=false;hist=[];lastH=-1};
+requestAnimationFrame(frame);
+</script></body></html>
